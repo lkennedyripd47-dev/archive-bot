@@ -560,8 +560,8 @@ async def admin_send_file(message: Message, state: FSMContext):
     await state.clear()
 
 async def main():
-    print("Bot muvaffaqiyatli ishga tushdi...")
+    await bot.delete_webhook(drop_pending_updates=True) 
     await dp.start_polling(bot)
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     asyncio.run(main())
