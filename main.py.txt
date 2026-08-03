@@ -1,8 +1,13 @@
 import asyncio
 import logging
 import sqlite3
+import os
+from datetime import datetime, timedelta
 from aiogram import Bot, Dispatcher, F, Router
-from aiogram.types import Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import (
+    Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, 
+    InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
+)
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -12,16 +17,14 @@ from aiogram.filters import CommandStart
 BOT_TOKEN = "8641331710:AAGgNE5QDyk79PBlaXPHYpkTZMaPibPDijA"
 ADMIN_ID = 1558893918
 
-# Logging
 logging.basicConfig(level=logging.INFO)
 
-# Bot va Dispatcher
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 router = Router()
 dp.include_router(router)
 
-# --- MA'LUMOTLAR BAZASI (SQLite) ---
+# --- MA'LUMOTLAR BAZASI ---
 def init_db():
     conn = sqlite3.connect("arxiv.db")
     cursor = conn.cursor()
@@ -32,9 +35,18 @@ def init_db():
             full_name TEXT,
             phone TEXT,
             service_type TEXT,
-            file_id TEXT,
-            status TEXT DEFAULT "Kutilmoqda",
-            payment_status TEXT DEFAULT "Tolanmagan"
+            sub_service TEXT,
+            price TEXT,
+            payment_type TEXT,
+            receipt_id TEXT,
+            work_info TEXT,
+            documents_id TEXT,
+            result_file_id TEXT,
+            result_file_type TEXT,
+            status TEXT,
+            payment_status TEXT,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
+            completed_at TIMESTAMP
         )
     ''')
     conn.commit()
@@ -43,32 +55,63 @@ def init_db():
 init_db()
 
 # --- FSM (Holatlar) ---
-class ApplicationState(StatesGroup):
+class Form(StatesGroup):
     waiting_for_name = State()
     waiting_for_phone = State()
     waiting_for_service = State()
-    waiting_for_file = State()
+    waiting_for_staj_duration = State()
+    waiting_for_payment_method = State()
+    waiting_for_receipt = State()
+    waiting_for_work_info = State()
+    waiting_for_documents = State()
+    waiting_for_other_details = State()
 
-class AdminState(StatesGroup):
+class AdminForm(StatesGroup):
     waiting_for_reply_file = State()
 
-# --- TUGMALAR (Keyboards) ---
+# --- MENYULAR (TUGMALAR) ---
 def main_menu():
     kb = [
-        [KeyboardButton(text="📁 Ariza topshirish")],
-        [KeyboardButton(text="🔍 Ariza holatini tekshirish"), KeyboardButton(text="📞 Bog'lanish")]
+        [KeyboardButton(text="📝 Ariza yuborish"), KeyboardButton(text="📂 Mening arizalarim")],
+        [KeyboardButton(text="🏢 Biz haqimizda"), KeyboardButton(text="📜 Ommaviy oferta")],
+        [KeyboardButton(text="📞 Bog'lanish")]
+    ]
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+
+def my_orders_menu():
+    kb = [
+        [KeyboardButton(text="⏳ Jarayondagi arizalar"), KeyboardButton(text="✅ Tugallangan arizalar")],
+        [KeyboardButton(text="⬅️ Bosh menyu")]
     ]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
 
 def phone_menu():
     kb = [[KeyboardButton(text="📱 Telefon raqamni yuborish", request_contact=True)]]
-    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True)
+    return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, one_time_keyboard=True)
 
+# Tartib raqamlar o'rniga stikerlar qo'yildi
 def services_menu():
     kb = [
-        [InlineKeyboardButton(text="💼 Ish stajini tasdiqlash", callback_data="serv_staj")],
-        [InlineKeyboardButton(text="💰 Ish haqi ma'lumotnomasi", callback_data="serv_haq")],
-        [InlineKeyboardButton(text="📜 Boshqa arxiv hujjatlari", callback_data="serv_boshqa")]
+        [InlineKeyboardButton(text="💼 Ish haqi va ish stajini tasdiqlash", callback_data="serv_1")],
+        [InlineKeyboardButton(text="📕 Yo'qotilgan/yaroqsiz mehnat daftarchasi", callback_data="serv_2")],
+        [InlineKeyboardButton(text="📄 Arxiv hujjatlaridan ko'chirma olish", callback_data="serv_3")],
+        [InlineKeyboardButton(text="🛠 Boshqa arxiv xizmatlari", callback_data="serv_4")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def staj_durations_menu():
+    kb = [
+        [InlineKeyboardButton(text="⏳ 1 yildan 5 yilgacha — 149 000 so'm", callback_data="dur_1_5")],
+        [InlineKeyboardButton(text="⏳ 5 yildan 10 yilgacha — 289 000 so'm", callback_data="dur_5_10")],
+        [InlineKeyboardButton(text="⏳ 10 yildan 15 yilgacha — 379 000 so'm", callback_data="dur_10_15")],
+        [InlineKeyboardButton(text="⏳ 15 yildan yuqori — 439 000 so'm", callback_data="dur_15_plus")]
+    ]
+    return InlineKeyboardMarkup(inline_keyboard=kb)
+
+def payment_methods_menu():
+    kb = [
+        [InlineKeyboardButton(text="💳 Click", callback_data="pay_click"), InlineKeyboardButton(text="💳 PayMe", callback_data="pay_payme")],
+        [InlineKeyboardButton(text="🏦 Naqd pul (Bank orqali)", callback_data="pay_cash")]
     ]
     return InlineKeyboardMarkup(inline_keyboard=kb)
 
@@ -77,126 +120,445 @@ def services_menu():
 @router.message(CommandStart())
 async def start_cmd(message: Message, state: FSMContext):
     await state.clear()
-    await message.answer(
-        f"Assalomu alaykum, {message.from_user.first_name}!\n"
-        f"Nodavlat arxiv xizmati botiga xush kelibsiz.\n\n"
-        f"Xizmatlardan foydalanish uchun quyidagi menyudan foydalaning:",
-        reply_markup=main_menu()
+    user_name = message.from_user.first_name or message.from_user.username or "Foydalanuvchi"
+    
+    welcome_text = f"Assalomu alaykum hurmatli {user_name}, Arxiv xizmatlari botiga xush kelibsiz. O'zingizga kerakli xizmat turini tanlang:"
+    await message.answer(welcome_text, reply_markup=main_menu())
+
+@router.message(F.text == "⬅️ Bosh menyu")
+async def back_to_main(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer("🏠 Bosh menyudasiz:", reply_markup=main_menu())
+
+# --- "OMMAVIY OFERTA" BO'LIMI ---
+@router.message(F.text == "📜 Ommaviy oferta")
+async def send_oferta(message: Message):
+    oferta_path = "oferta.pdf"  # Bot joylashgan papkadagi PDF fayl nomi
+    if os.path.exists(oferta_path):
+        document = FSInputFile(oferta_path)
+        await message.answer_document(
+            document=document,
+            caption="📜 **\"ELITE ARCHIVE GROUP\" nodavlat arxiv muassasasining Ommaviy oferta shartnomasi.**",
+            parse_mode="Markdown"
+        )
+    else:
+        await message.answer("📜 **Ommaviy oferta shartnomasi:**\n\nTo'lov maqsadi: 1-sonli ommaviy oferta shartnomasiga asosan (hujjat kodi: WH36367184)\n\n*(Eslatma: oferta.pdf fayli serverga yuklanmagan)*")
+
+# --- "BIZ HAQIMIZDA" BO'LIMI ---
+@router.message(F.text == "🏢 Biz haqimizda")
+async def about_us(message: Message):
+    text = (
+        "🏢 **Tashkilot nomi:** \"ELITE ARCHIVE GROUP\" MCHJ nodavlat arxiv muassasasi\n"
+        "🆔 **STIR:** 312665542\n"
+        "📜 **Litsenziya:** №1272444 (license.gov.uz sayti orqali tekshiring: X-1485115)\n"
+        "🏦 **MFO:** 00083\n"
+        "🏛 **Bank:** Hamkorbank UBXO Quvasoy filiali\n"
+        "💳 **Hisobraqam:** 20208000507368011001\n"
+        "📍 **Manzil:** Farg'ona viloyati, Quvasoy shahri, Cho'lpon MFY, A.Navoiy ko'chasi 163-uy"
     )
+    await message.answer(text, parse_mode="Markdown")
 
-# Ariza topshirishni boshlash
-@router.message(F.text == "📁 Ariza topshirish")
-async def start_app(message: Message, state: FSMContext):
-    await message.answer("Iltimos, F.I.SH. (Familiya, Ism, Sharifingizni) kiriting:")
-    await state.set_state(ApplicationState.waiting_for_name)
+# --- "BOG'LANISH" BO'LIMI ---
+@router.message(F.text == "📞 Bog'lanish")
+async def contact_us(message: Message):
+    text = (
+        "📞 **Biz bilan bog'lanish uchun:**\n\n"
+        "👤 **Rahbar:** 📞 +(998) 33 023-47-47 (Akbaraliyev Muhammad Ali)\n"
+        "👩‍💼 **Mutaxassis:** 📞 +(998) 93 161-44-47 (Yakubova Diloromxon)\n\n"
+        "📍 **Manzil:** Quvasoy shahri, Cho'lpon MFY, A.Navoiy ko'chasi 163-uy, 1-kirish, 2-qavat"
+    )
+    await message.answer(text, parse_mode="Markdown")
 
-@router.message(ApplicationState.waiting_for_name)
+# --- "MENING ARIZALARIM" BO'LIMI (OPTIMALLASHGAN) ---
+@router.message(F.text == "📂 Mening arizalarim")
+async def my_orders(message: Message):
+    await message.answer("🗂 Kerakli bo'limni tanlang:", reply_markup=my_orders_menu())
+
+# JARAYONDAGI ARIZALAR (Optimizasiya qilindi: Ariza № va mijoz tavsifi bilan)
+@router.message(F.text == "⏳ Jarayondagi arizalar")
+async def pending_orders(message: Message):
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name or "fuqaro"
+    
+    conn = sqlite3.connect("arxiv.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, service_type, work_info, status FROM orders WHERE user_id = ? AND status != 'Bajarildi'", 
+        (user_id,)
+    )
+    orders = cursor.fetchall()
+    conn.close()
+    
+    if not orders:
+        await message.answer("🔍 Sizda hozirda jarayondagi arizalar topilmadi.")
+        return
+
+    for order in orders:
+        order_id, service_type, work_info, status = order
+        details = work_info if work_info and work_info != '-' else "Ma'lumot kiritilmagan"
+        
+        msg_text = (
+            f"📌 **Ariza №{order_id}**\n"
+            f"🔹 **Xizmat turi:** {service_type}\n"
+            f"📝 **Siz qoldirgan tavsif/ma'lumot:** {details}\n"
+            f"📊 **Holati:** {status}\n\n"
+            f"⏳ *Hurmatli {user_name}, ushbu arizangiz mutaxassislarimiz tomonidan ko'rib chiqilmoqda/tayyorlanmoqda. Tez orada tayyor hujjat botga yuklanadi.*"
+        )
+        await message.answer(msg_text, parse_mode="Markdown")
+
+# TUGALLANGAN ARIZALAR (Optimizasiya qilindi: 15 kunga qat'iy tekshiruv va ilovalar bilan)
+@router.message(F.text == "✅ Tugallangan arizalar")
+async def completed_orders(message: Message):
+    user_id = message.from_user.id
+    user_name = message.from_user.first_name or "fuqaro"
+    
+    fifteen_days_ago = (datetime.now() - timedelta(days=15)).strftime("%Y-%m-%d %H:%M:%S")
+    
+    conn = sqlite3.connect("arxiv.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "SELECT id, service_type, completed_at, result_file_id, result_file_type FROM orders WHERE user_id = ? AND status = 'Bajarildi' AND completed_at >= ?", 
+        (user_id, fifteen_days_ago)
+    )
+    orders = cursor.fetchall()
+    conn.close()
+    
+    # 15 kundan o'tgan bo'lsa yoki topilmasa ko'rsatiladigan maxsus yozuv
+    if not orders:
+        info_msg = (
+            f"Hurmatli {user_name}, bizning serverlarimiz yaxshiroq va tezroq ishlashi uchun tayyorlangan arizalar botimizda 15 kun saqlanadi va keyin avtomatik tarzda o'chirib tashlanadi, "
+            f"agar sizga bu borada yordam kerak bo'lsa botning \"Bog'lanish\" tugmasini ustiga bosing."
+        )
+        await message.answer(info_msg)
+        return
+
+    await message.answer(f"✅ **Hurmatli {user_name}, so'nggi 15 kun ichida tugallangan arizalaringiz va ularning tayyor hujjatlari:**", parse_mode="Markdown")
+
+    for order in orders:
+        order_id, service_type, completed_at, file_id, file_type = order
+        
+        caption = (
+            f"✅ **Ariza №{order_id} (Tugallangan)**\n"
+            f"📌 **Xizmat:** {service_type}\n"
+            f"📅 **Bajarilgan vaqti:** {completed_at}\n\n"
+            f"📎 *Tayyorlangan hujjat fayli quyida biriktirilgan:* "
+        )
+        
+        # Admin jo'natgan ilovalari bilan birga chiqariladi
+        if file_id:
+            if file_type == "photo":
+                await message.answer_photo(photo=file_id, caption=caption, parse_mode="Markdown")
+            else:
+                await message.answer_document(document=file_id, caption=caption, parse_mode="Markdown")
+        else:
+            await message.answer(caption + "\n⚠️ *(Fayl serverdan topilmadi)*", parse_mode="Markdown")
+
+# --- ARIZA YUBORISH JARAYONI ---
+
+@router.message(F.text == "📝 Ariza yuborish")
+async def start_application(message: Message, state: FSMContext):
+    await state.clear()
+    await message.answer(
+        "👤 Iltimos, F.I.SH (Familiya, Ism, Sharifingizni) kiriting (agar qizlik familiyangiz o'zgargan bo'lsa uni ham kiritish shart):"
+    )
+    await state.set_state(Form.waiting_for_name)
+
+@router.message(Form.waiting_for_name)
 async def process_name(message: Message, state: FSMContext):
     await state.update_data(full_name=message.text)
-    await message.answer("Telefon raqamingizni yuboring (Tugmani bosing):", reply_markup=phone_menu())
-    await state.set_state(ApplicationState.waiting_for_phone)
+    await message.answer(
+        "📞 Iltimos, siz bilan bog'lanishimiz uchun ishlaydigan telefon raqamingizni yuboring:",
+        reply_markup=phone_menu()
+    )
+    await state.set_state(Form.waiting_for_phone)
 
-@router.message(ApplicationState.waiting_for_phone)
+@router.message(Form.waiting_for_phone)
 async def process_phone(message: Message, state: FSMContext):
     phone = message.contact.phone_number if message.contact else message.text
     await state.update_data(phone=phone)
     
-    await message.answer("Kerakli xizmat turini tanlang:", reply_markup=services_menu())
-    await state.set_state(ApplicationState.waiting_for_service)
+    await message.answer("🗂 Kerakli arxiv xizmatini tanlang:", reply_markup=services_menu())
+    await state.set_state(Form.waiting_for_service)
 
-@router.callback_query(ApplicationState.waiting_for_service, F.data.startswith("serv_"))
+@router.callback_query(Form.waiting_for_service, F.data.startswith("serv_"))
 async def process_service(call: CallbackQuery, state: FSMContext):
-    services = {
-        "serv_staj": "Ish stajini tasdiqlash",
-        "serv_haq": "Ish haqi ma'lumotnomasi",
-        "serv_boshqa": "Boshqa arxiv hujjatlari"
-    }
-    selected_service = services.get(call.data, "Noma'lum xizmat")
-    await state.update_data(service_type=selected_service)
+    serv = call.data
     
-    await call.message.answer("Hujjatingiz nusxasini (Pasport yoki Mehnat daftarchasi) Rasm yoki PDF shaklida yuboring:")
-    await state.set_state(ApplicationState.waiting_for_file)
+    if serv == "serv_1":
+        await state.update_data(service_type="Ish haqi va ish stajini tasdiqlash")
+        await call.message.answer(
+            "⏳ Quyidagi ish haqi va staj ma'lumotnomalari muddatlaridan o'zingizga keraklisini tanlang:\n\n"
+            "*(Arizangiz 2-5 ish kuni ichida tayyor bo'ladi)*",
+            reply_markup=staj_durations_menu(),
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.waiting_for_staj_duration)
+        
+    elif serv == "serv_2":
+        price = "412 000 so'm (1 BXM)"
+        await state.update_data(service_type="Yo'qotilgan yoki yaroqsiz mehnat daftarchasi", price=price)
+        await call.message.answer(
+            f"📕 Yaroqsiz holatga kelgan yoki yo'qotilgan mehnat daftarchalaridagi yozuvlarni tasdiqlash xizmati **{price}**ni tashkil etadi.\n\n"
+            f"*(Arizangiz 2-5 ish kuni ichida tayyor bo'ladi)*\n\n💳 To'lov usulini tanlang:",
+            reply_markup=payment_methods_menu(),
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.waiting_for_payment_method)
+        
+    elif serv == "serv_3":
+        price = "346 080 so'm (0.75 BXM+QQS)"
+        await state.update_data(service_type="Arxiv hujjatlaridan ko'chirma olish", price=price)
+        await call.message.answer(
+            f"📄 Arxiv hujjatlaridan yozma ko'chirma olish xizmati **{price}**ni tashkil qiladi.\n\n💳 To'lov usulini tanlang:",
+            reply_markup=payment_methods_menu(),
+            parse_mode="Markdown"
+        )
+        await state.set_state(Form.waiting_for_payment_method)
+        
+    elif serv == "serv_4":
+        await state.update_data(service_type="Boshqa arxiv xizmatlari")
+        await call.message.answer(
+            "🛠 Sizga qaysi arxiv xizmati kerakligini batafsil yozing hamda ushbu xizmat uchun kerak bo'ladigan hujjatlar yoki o'z izohlarni ilova qiling:"
+        )
+        await state.set_state(Form.waiting_for_other_details)
+        
     await call.answer()
 
-@router.message(ApplicationState.waiting_for_file, F.photo | F.document)
-async def process_file(message: Message, state: FSMContext):
-    file_id = message.photo[-1].file_id if message.photo else message.document.file_id
+@router.callback_query(Form.waiting_for_staj_duration, F.data.startswith("dur_"))
+async def process_duration(call: CallbackQuery, state: FSMContext):
+    durations = {
+        "dur_1_5": ("1 yildan 5 yilgacha", "149 000 so'm"),
+        "dur_5_10": ("5 yildan 10 yilgacha", "289 000 so'm"),
+        "dur_10_15": ("10 yildan 15 yilgacha", "379 000 so'm"),
+        "dur_15_plus": ("15 yildan yuqori", "439 000 so'm")
+    }
+    sub, price = durations.get(call.data)
+    await state.update_data(sub_service=sub, price=price)
+    
+    await call.message.answer(
+        f"✅ Tanlandi: **{sub}** ({price})\n\n💳 To'lov usulini tanlang:",
+        reply_markup=payment_methods_menu(),
+        parse_mode="Markdown"
+    )
+    await state.set_state(Form.waiting_for_payment_method)
+    await call.answer()
+
+# --- TO'LOV MANTIQLARI ---
+
+@router.callback_query(Form.waiting_for_payment_method, F.data.startswith("pay_"))
+async def process_payment_method(call: CallbackQuery, state: FSMContext):
+    pay_type = call.data
+    data = await state.get_data()
+    price = data.get("price")
+    
+    oferta_text = "To'lov maqsadi: 1-sonli ommaviy oferta shartnomasiga asosan(hujjat kodi:WH36367184)"
+    
+    if pay_type in ["pay_click", "pay_payme"]:
+        await state.update_data(payment_type="Click/Payme Online")
+        await call.message.answer(
+            f"💰 To'lov summasi: {price}\n"
+            f"📌 {oferta_text}\n\n"
+            f"🧾 To'lov kvitansiyasini (skrinshot) rasm yoki PDF shaklida botga yuboring:"
+        )
+    else:
+        await state.update_data(payment_type="Naqd pul (Bank)")
+        await call.message.answer(
+            f"🏦 **Bank rekvizitlarimiz:**\n"
+            f"Tashkilot: \"ELITE ARCHIVE GROUP\" MCHJ\n"
+            f"X/R: 20208000507368011001\n"
+            f"MFO: 00083\n"
+            f"💰 To'lov summasi: {price}\n"
+            f"📌 **{oferta_text}**\n\n"
+            f"🧾 To'lov qilgandan keyin to'lov cheki yoki kvitansiyasini rasm yoki PDF shaklda botga jo'nating:",
+            parse_mode="Markdown"
+        )
+    await state.set_state(Form.waiting_for_receipt)
+    await call.answer()
+
+@router.message(Form.waiting_for_receipt, F.photo | F.document)
+async def process_receipt(message: Message, state: FSMContext):
+    receipt_id = message.photo[-1].file_id if message.photo else message.document.file_id
+    await state.update_data(receipt_id=receipt_id)
     data = await state.get_data()
     
-    # Bazaga saqlash
     conn = sqlite3.connect("arxiv.db")
     cursor = conn.cursor()
     cursor.execute(
-        "INSERT INTO orders (user_id, full_name, phone, service_type, file_id) VALUES (?, ?, ?, ?, ?)",
-        (message.from_user.id, data['full_name'], data['phone'], data['service_type'], file_id)
+        "INSERT INTO orders (user_id, full_name, phone, service_type, sub_service, price, payment_type, receipt_id, status, payment_status) "
+        "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (message.from_user.id, data['full_name'], data['phone'], data['service_type'], data.get('sub_service', '-'), data['price'], data['payment_type'], receipt_id, "To'lov kutilmoqda", "Tekshirilmoqda")
     )
     order_id = cursor.lastrowid
     conn.commit()
     conn.close()
-
-    await message.answer(
-        f"✅ Arizangiz qabul qilindi!\n\n"
-        f"🆔 Ariza raqami: #{order_id}\n"
-        f"👤 F.I.SH: {data['full_name']}\n"
-        f"📌 Xizmat: {data['service_type']}\n\n"
-        f"Tez orada arizangiz ko'rib chiqiladi.",
-        reply_markup=main_menu()
-    )
-
-    # Admin (Arxivchi)ga xabar yuborish
+    
+    await message.answer("✅ To'lov cheki qabul qilindi. Mutaxassis to'lovni tasdiqlagach arizangiz shakllantiriladi va sizga xabar beriladi.", reply_markup=main_menu())
+    
     admin_text = (
-        f"📥 **Yangi ariza tushdi! (#ID_{order_id})**\n\n"
+        f"💳 **Yangi to'lov tekshiruvi! (#ID_{order_id})**\n\n"
         f"👤 Mijoz: {data['full_name']}\n"
         f"📞 Tel: {data['phone']}\n"
-        f"📌 Xizmat: {data['service_type']}"
+        f"📌 Xizmat: {data['service_type']} ({data.get('sub_service', '-')})\n"
+        f"💰 Summa: {data['price']}\n"
+        f"💳 Turi: {data['payment_type']}"
     )
-    
     kb_admin = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="📄 Hujjatni tayyorlab yuborish", callback_data=f"reply_{order_id}_{message.from_user.id}")]
+        [InlineKeyboardButton(text="✅ To'lovni tasdiqlash", callback_data=f"approve_{order_id}_{message.from_user.id}")]
     ])
     
     if message.photo:
-        await bot.send_photo(chat_id=ADMIN_ID, photo=file_id, caption=admin_text, reply_markup=kb_admin)
+        await bot.send_photo(chat_id=ADMIN_ID, photo=receipt_id, caption=admin_text, reply_markup=kb_admin)
     else:
-        await bot.send_document(chat_id=ADMIN_ID, document=file_id, caption=admin_text, reply_markup=kb_admin)
+        await bot.send_document(chat_id=ADMIN_ID, document=receipt_id, caption=admin_text, reply_markup=kb_admin)
 
+@router.callback_query(F.data.startswith("approve_"))
+async def approve_payment(call: CallbackQuery, state: FSMContext):
+    _, order_id, user_id = call.data.split("_")
+    user_id = int(user_id)
+    
+    conn = sqlite3.connect("arxiv.db")
+    cursor = conn.cursor()
+    cursor.execute("SELECT service_type FROM orders WHERE id = ?", (order_id,))
+    row = cursor.fetchone()
+    service_type = row[0] if row else ""
+    
+    cursor.execute(
+        "UPDATE orders SET payment_status = 'Tasdiqlandi', status = 'Malumotlar kutilmoqda' WHERE id = ?",
+        (order_id,)
+    )
+    conn.commit()
+    conn.close()
+    
+    await call.message.answer(f"✅ #{order_id}-sonli to'lov tasdiqlandi. Mijozga hujjatlarni yuborish so'rovi yuborildi.")
+    await call.answer()
+    
+    user_state = FSMContext(storage=dp.storage, key=state.key.__class__(bot_id=bot.id, chat_id=user_id, user_id=user_id))
+    await user_state.update_data(active_order_id=order_id, service_type=service_type)
+    
+    if service_type in ["Ish haqi va ish stajini tasdiqlash", "Yo'qotilgan yoki yaroqsiz mehnat daftarchasi"]:
+        prompt_text = "🏢 Qaysi tashkilotda ishlagan ish haqi va ish staji ma'lumotlaringiz kerak bo'lsa iltimos o'sha tashkilot nomi, faoliyat yurutgan bo'lim va lavozimingiz hamda ishlagan yillaringizni to'liq yozing."
+        if service_type == "Yo'qotilgan yoki yaroqsiz mehnat daftarchasi":
+            prompt_text += " Ma'lumotlaringiz oson topilishi uchun qo'shimcha ma'lumotlarni ham yozishni unutmang(tabel raqami, bo'lim, lavozim, dekret oylari va boshqalar)."
+        
+        await bot.send_message(chat_id=user_id, text=f"✅ To'lov tasdiqlandi!\n\n{prompt_text}")
+        await user_state.set_state(Form.waiting_for_work_info)
+    else:
+        await bot.send_message(chat_id=user_id, text="✅ To'lov tasdiqlandi!\n\n📄 Passport (ID-karta) nusxasini rasm yoki PDF shaklida yuboring:")
+        await user_state.set_state(Form.waiting_for_documents)
+
+@router.message(Form.waiting_for_work_info)
+async def process_work_info(message: Message, state: FSMContext):
+    await state.update_data(work_info=message.text)
+    data = await state.get_data()
+    
+    if data.get("service_type") == "Ish haqi va ish stajini tasdiqlash":
+        await message.answer("📄 Passport (ID-karta) hamda mehnat daftarchangiz(Trudavoy) nusxasini rasm yoki PDF shaklida yuboring:")
+    else:
+        await message.answer("📄 Passport (ID-karta) nusxasini rasm yoki PDF shaklida yuboring:")
+        
+    await state.set_state(Form.waiting_for_documents)
+
+@router.message(Form.waiting_for_documents, F.photo | F.document)
+async def process_documents(message: Message, state: FSMContext):
+    docs_id = message.photo[-1].file_id if message.photo else message.document.file_id
+    data = await state.get_data()
+    order_id = data.get("active_order_id")
+    
+    conn = sqlite3.connect("arxiv.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "UPDATE orders SET work_info = ?, documents_id = ?, status = 'Jarayonda' WHERE id = ?",
+        (data.get('work_info', '-'), docs_id, order_id)
+    )
+    cursor.execute("SELECT full_name, phone, service_type, sub_service, price FROM orders WHERE id = ?", (order_id,))
+    order_info = cursor.fetchone()
+    conn.commit()
+    conn.close()
+    
+    await message.answer("🎉 Arizangiz to'liq shakllantirildi va qabul qilindi! Tez orada ma'lumotnomangiz tayyorlanadi.", reply_markup=main_menu())
+    
+    admin_text = (
+        f"📑 **YANGI SHAKLLANGAN ARIZA! (#ID_{order_id})**\n\n"
+        f"👤 F.I.SH: {order_info[0]}\n"
+        f"📞 Tel: {order_info[1]}\n"
+        f"📌 Xizmat: {order_info[2]} ({order_info[3]})\n"
+        f"💰 To'lov: {order_info[4]} (Tasdiqlangan ✅)\n"
+        f"🏢 Ish joyi/Tafsilotlar: {data.get('work_info', '-')}"
+    )
+    kb_admin = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="📤 Tayyor hujjatni mijozga yuborish", callback_data=f"reply_{order_id}_{message.from_user.id}")]
+    ])
+    
+    if message.photo:
+        await bot.send_photo(chat_id=ADMIN_ID, photo=docs_id, caption=admin_text, reply_markup=kb_admin)
+    else:
+        await bot.send_document(chat_id=ADMIN_ID, document=docs_id, caption=admin_text, reply_markup=kb_admin)
+        
     await state.clear()
 
-# --- ADMIN JAVOB BERISH MANTIQLARI ---
+@router.message(Form.waiting_for_other_details)
+async def process_other_details(message: Message, state: FSMContext):
+    data = await state.get_data()
+    
+    conn = sqlite3.connect("arxiv.db")
+    cursor = conn.cursor()
+    cursor.execute(
+        "INSERT INTO orders (user_id, full_name, phone, service_type, work_info, status) VALUES (?, ?, ?, ?, ?, ?)",
+        (message.from_user.id, data['full_name'], data['phone'], data['service_type'], message.text, "Ko'rib chiqilmoqda")
+    )
+    order_id = cursor.lastrowid
+    conn.commit()
+    conn.close()
+    
+    await message.answer("✅ Arizangiz qabul qilindi, tez orada mutaxassislarimiz siz bilan bog'lanishadi.", reply_markup=main_menu())
+    
+    admin_text = (
+        f"❓ **Boshqa xizmat turi bo'yicha murojaat (#ID_{order_id})**\n\n"
+        f"👤 Mijoz: {data['full_name']}\n"
+        f"📞 Tel: {data['phone']}\n"
+        f"📝 Xabar/Izoh: {message.text}"
+    )
+    await bot.send_message(chat_id=ADMIN_ID, text=admin_text)
+    await state.clear()
+
+# --- ADMIN TARAFI ---
+
 @router.callback_query(F.data.startswith("reply_"))
 async def admin_reply_start(call: CallbackQuery, state: FSMContext):
     _, order_id, user_id = call.data.split("_")
     await state.update_data(target_order_id=order_id, target_user_id=user_id)
-    await call.message.answer(f"#{order_id}-sonli ariza uchun tayyor tayyorlangan hujjatni (PDF yoki Rasm shaklida) yuboring:")
-    await state.set_state(AdminState.waiting_for_reply_file)
+    await call.message.answer(f"📤 #{order_id}-sonli ariza uchun tayyorlangan hujjatni (PDF yoki Rasm) yuboring:")
+    await state.set_state(AdminForm.waiting_for_reply_file)
     await call.answer()
 
-@router.message(AdminState.waiting_for_reply_file, F.photo | F.document)
+@router.message(AdminForm.waiting_for_reply_file, F.photo | F.document)
 async def admin_send_file(message: Message, state: FSMContext):
     data = await state.get_data()
     target_user_id = int(data['target_user_id'])
     target_order_id = data['target_order_id']
     
     file_id = message.photo[-1].file_id if message.photo else message.document.file_id
+    file_type = "photo" if message.photo else "document"
     
-    # Mijozga yuborish
-    caption = f"🎉 **Arizangiz tayyor bo'ldi!**\n\n🆔 Ariza raqami: #{target_order_id}\nNodavlat arxiv xizmatimizdan foydalanganingiz uchun rahmat!"
+    caption = f"🎉 **Arizangiz tayyor bo'ldi!**\n\n🆔 Ariza raqami: #{target_order_id}\n\nArxiv xizmatimizdan foydalanganingiz uchun rahmat!"
     if message.photo:
         await bot.send_photo(chat_id=target_user_id, photo=file_id, caption=caption)
     else:
         await bot.send_document(chat_id=target_user_id, document=file_id, caption=caption)
         
-    # Bazada statusni yangilash
+    now_str = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     conn = sqlite3.connect("arxiv.db")
     cursor = conn.cursor()
-    cursor.execute("UPDATE orders SET status = 'Bajarildi' WHERE id = ?", (target_order_id,))
+    cursor.execute(
+        "UPDATE orders SET status = 'Bajarildi', result_file_id = ?, result_file_type = ?, completed_at = ? WHERE id = ?", 
+        (file_id, file_type, now_str, target_order_id)
+    )
     conn.commit()
     conn.close()
 
-    await message.answer(f"✅ #{target_order_id}-sonli ariza bo'yicha javob mijozga muvaffaqiyatli yuborildi!")
+    await message.answer(f"✅ #{target_order_id}-sonli ma'lumotnoma mijozga muvaffaqiyatli yuborildi va arxivga saqlandi!")
     await state.clear()
 
-# --- BOTNI ISHGA TUSHIRISH ---
 async def main():
     print("Bot muvaffaqiyatli ishga tushdi...")
     await dp.start_polling(bot)
