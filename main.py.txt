@@ -14,7 +14,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.filters import CommandStart
 
 # --- SOZLAMALAR ---
-BOT_TOKEN = "8641331710:AAGgNE5QDyk79PBlaXPHYpkTZMaPibPDijA"
+BOT_TOKEN = "8641331710:AAEyX7kOrHw0GuQVQ0wviqXQPNre7wKY6jU"
 ADMIN_ID = 1558893918
 
 logging.basicConfig(level=logging.INFO)
