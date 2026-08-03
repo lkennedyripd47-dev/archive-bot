@@ -3,7 +3,7 @@ import logging
 import sqlite3
 import os
 from datetime import datetime, timedelta
-from aiogram import Bot, Dispatcher, F, Router
+from aiogram import Bot, Dispatcher, F
 from aiogram.types import (
     Message, CallbackQuery, ReplyKeyboardMarkup, KeyboardButton, 
     InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile
@@ -21,8 +21,6 @@ logging.basicConfig(level=logging.INFO)
 
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
-router = Router()
-dp.include_router(router)
 
 # --- MA'LUMOTLAR BAZASI ---
 def init_db():
@@ -89,7 +87,6 @@ def phone_menu():
     kb = [[KeyboardButton(text="📱 Telefon raqamni yuborish", request_contact=True)]]
     return ReplyKeyboardMarkup(keyboard=kb, resize_keyboard=True, one_time_keyboard=True)
 
-# Tartib raqamlar o'rniga stikerlar qo'yildi
 def services_menu():
     kb = [
         [InlineKeyboardButton(text="💼 Ish haqi va ish stajini tasdiqlash", callback_data="serv_1")],
@@ -117,23 +114,22 @@ def payment_methods_menu():
 
 # --- BOT MANTIQLARI ---
 
-@router.message(CommandStart())
+@dp.message(CommandStart())
 async def start_cmd(message: Message, state: FSMContext):
     await state.clear()
     user_name = message.from_user.first_name or message.from_user.username or "Foydalanuvchi"
-    
     welcome_text = f"Assalomu alaykum hurmatli {user_name}, Arxiv xizmatlari botiga xush kelibsiz. O'zingizga kerakli xizmat turini tanlang:"
     await message.answer(welcome_text, reply_markup=main_menu())
 
-@router.message(F.text == "⬅️ Bosh menyu")
+@dp.message(F.text == "⬅️ Bosh menyu")
 async def back_to_main(message: Message, state: FSMContext):
     await state.clear()
     await message.answer("🏠 Bosh menyudasiz:", reply_markup=main_menu())
 
 # --- "OMMAVIY OFERTA" BO'LIMI ---
-@router.message(F.text == "📜 Ommaviy oferta")
+@dp.message(F.text == "📜 Ommaviy oferta")
 async def send_oferta(message: Message):
-    oferta_path = "oferta.pdf"  # Bot joylashgan papkadagi PDF fayl nomi
+    oferta_path = "oferta.pdf"
     if os.path.exists(oferta_path):
         document = FSInputFile(oferta_path)
         await message.answer_document(
@@ -145,7 +141,7 @@ async def send_oferta(message: Message):
         await message.answer("📜 **Ommaviy oferta shartnomasi:**\n\nTo'lov maqsadi: 1-sonli ommaviy oferta shartnomasiga asosan (hujjat kodi: WH36367184)\n\n*(Eslatma: oferta.pdf fayli serverga yuklanmagan)*")
 
 # --- "BIZ HAQIMIZDA" BO'LIMI ---
-@router.message(F.text == "🏢 Biz haqimizda")
+@dp.message(F.text == "🏢 Biz haqimizda")
 async def about_us(message: Message):
     text = (
         "🏢 **Tashkilot nomi:** \"ELITE ARCHIVE GROUP\" MCHJ nodavlat arxiv muassasasi\n"
@@ -159,7 +155,7 @@ async def about_us(message: Message):
     await message.answer(text, parse_mode="Markdown")
 
 # --- "BOG'LANISH" BO'LIMI ---
-@router.message(F.text == "📞 Bog'lanish")
+@dp.message(F.text == "📞 Bog'lanish")
 async def contact_us(message: Message):
     text = (
         "📞 **Biz bilan bog'lanish uchun:**\n\n"
@@ -169,13 +165,12 @@ async def contact_us(message: Message):
     )
     await message.answer(text, parse_mode="Markdown")
 
-# --- "MENING ARIZALARIM" BO'LIMI (OPTIMALLASHGAN) ---
-@router.message(F.text == "📂 Mening arizalarim")
+# --- "MENING ARIZALARIM" BO'LIMI ---
+@dp.message(F.text == "📂 Mening arizalarim")
 async def my_orders(message: Message):
     await message.answer("🗂 Kerakli bo'limni tanlang:", reply_markup=my_orders_menu())
 
-# JARAYONDAGI ARIZALAR (Optimizasiya qilindi: Ariza № va mijoz tavsifi bilan)
-@router.message(F.text == "⏳ Jarayondagi arizalar")
+@dp.message(F.text == "⏳ Jarayondagi arizalar")
 async def pending_orders(message: Message):
     user_id = message.from_user.id
     user_name = message.from_user.first_name or "fuqaro"
@@ -206,8 +201,7 @@ async def pending_orders(message: Message):
         )
         await message.answer(msg_text, parse_mode="Markdown")
 
-# TUGALLANGAN ARIZALAR (Optimizasiya qilindi: 15 kunga qat'iy tekshiruv va ilovalar bilan)
-@router.message(F.text == "✅ Tugallangan arizalar")
+@dp.message(F.text == "✅ Tugallangan arizalar")
 async def completed_orders(message: Message):
     user_id = message.from_user.id
     user_name = message.from_user.first_name or "fuqaro"
@@ -223,7 +217,6 @@ async def completed_orders(message: Message):
     orders = cursor.fetchall()
     conn.close()
     
-    # 15 kundan o'tgan bo'lsa yoki topilmasa ko'rsatiladigan maxsus yozuv
     if not orders:
         info_msg = (
             f"Hurmatli {user_name}, bizning serverlarimiz yaxshiroq va tezroq ishlashi uchun tayyorlangan arizalar botimizda 15 kun saqlanadi va keyin avtomatik tarzda o'chirib tashlanadi, "
@@ -244,7 +237,6 @@ async def completed_orders(message: Message):
             f"📎 *Tayyorlangan hujjat fayli quyida biriktirilgan:* "
         )
         
-        # Admin jo'natgan ilovalari bilan birga chiqariladi
         if file_id:
             if file_type == "photo":
                 await message.answer_photo(photo=file_id, caption=caption, parse_mode="Markdown")
@@ -255,7 +247,7 @@ async def completed_orders(message: Message):
 
 # --- ARIZA YUBORISH JARAYONI ---
 
-@router.message(F.text == "📝 Ariza yuborish")
+@dp.message(F.text == "📝 Ariza yuborish")
 async def start_application(message: Message, state: FSMContext):
     await state.clear()
     await message.answer(
@@ -263,7 +255,7 @@ async def start_application(message: Message, state: FSMContext):
     )
     await state.set_state(Form.waiting_for_name)
 
-@router.message(Form.waiting_for_name)
+@dp.message(Form.waiting_for_name)
 async def process_name(message: Message, state: FSMContext):
     await state.update_data(full_name=message.text)
     await message.answer(
@@ -272,7 +264,7 @@ async def process_name(message: Message, state: FSMContext):
     )
     await state.set_state(Form.waiting_for_phone)
 
-@router.message(Form.waiting_for_phone)
+@dp.message(Form.waiting_for_phone)
 async def process_phone(message: Message, state: FSMContext):
     phone = message.contact.phone_number if message.contact else message.text
     await state.update_data(phone=phone)
@@ -280,7 +272,7 @@ async def process_phone(message: Message, state: FSMContext):
     await message.answer("🗂 Kerakli arxiv xizmatini tanlang:", reply_markup=services_menu())
     await state.set_state(Form.waiting_for_service)
 
-@router.callback_query(Form.waiting_for_service, F.data.startswith("serv_"))
+@dp.callback_query(Form.waiting_for_service, F.data.startswith("serv_"))
 async def process_service(call: CallbackQuery, state: FSMContext):
     serv = call.data
     
@@ -324,7 +316,7 @@ async def process_service(call: CallbackQuery, state: FSMContext):
         
     await call.answer()
 
-@router.callback_query(Form.waiting_for_staj_duration, F.data.startswith("dur_"))
+@dp.callback_query(Form.waiting_for_staj_duration, F.data.startswith("dur_"))
 async def process_duration(call: CallbackQuery, state: FSMContext):
     durations = {
         "dur_1_5": ("1 yildan 5 yilgacha", "149 000 so'm"),
@@ -345,7 +337,7 @@ async def process_duration(call: CallbackQuery, state: FSMContext):
 
 # --- TO'LOV MANTIQLARI ---
 
-@router.callback_query(Form.waiting_for_payment_method, F.data.startswith("pay_"))
+@dp.callback_query(Form.waiting_for_payment_method, F.data.startswith("pay_"))
 async def process_payment_method(call: CallbackQuery, state: FSMContext):
     pay_type = call.data
     data = await state.get_data()
@@ -375,7 +367,7 @@ async def process_payment_method(call: CallbackQuery, state: FSMContext):
     await state.set_state(Form.waiting_for_receipt)
     await call.answer()
 
-@router.message(Form.waiting_for_receipt, F.photo | F.document)
+@dp.message(Form.waiting_for_receipt, F.photo | F.document)
 async def process_receipt(message: Message, state: FSMContext):
     receipt_id = message.photo[-1].file_id if message.photo else message.document.file_id
     await state.update_data(receipt_id=receipt_id)
@@ -411,7 +403,7 @@ async def process_receipt(message: Message, state: FSMContext):
     else:
         await bot.send_document(chat_id=ADMIN_ID, document=receipt_id, caption=admin_text, reply_markup=kb_admin)
 
-@router.callback_query(F.data.startswith("approve_"))
+@dp.callback_query(F.data.startswith("approve_"))
 async def approve_payment(call: CallbackQuery, state: FSMContext):
     _, order_id, user_id = call.data.split("_")
     user_id = int(user_id)
@@ -446,7 +438,7 @@ async def approve_payment(call: CallbackQuery, state: FSMContext):
         await bot.send_message(chat_id=user_id, text="✅ To'lov tasdiqlandi!\n\n📄 Passport (ID-karta) nusxasini rasm yoki PDF shaklida yuboring:")
         await user_state.set_state(Form.waiting_for_documents)
 
-@router.message(Form.waiting_for_work_info)
+@dp.message(Form.waiting_for_work_info)
 async def process_work_info(message: Message, state: FSMContext):
     await state.update_data(work_info=message.text)
     data = await state.get_data()
@@ -458,7 +450,7 @@ async def process_work_info(message: Message, state: FSMContext):
         
     await state.set_state(Form.waiting_for_documents)
 
-@router.message(Form.waiting_for_documents, F.photo | F.document)
+@dp.message(Form.waiting_for_documents, F.photo | F.document)
 async def process_documents(message: Message, state: FSMContext):
     docs_id = message.photo[-1].file_id if message.photo else message.document.file_id
     data = await state.get_data()
@@ -496,7 +488,7 @@ async def process_documents(message: Message, state: FSMContext):
         
     await state.clear()
 
-@router.message(Form.waiting_for_other_details)
+@dp.message(Form.waiting_for_other_details)
 async def process_other_details(message: Message, state: FSMContext):
     data = await state.get_data()
     
@@ -523,7 +515,7 @@ async def process_other_details(message: Message, state: FSMContext):
 
 # --- ADMIN TARAFI ---
 
-@router.callback_query(F.data.startswith("reply_"))
+@dp.callback_query(F.data.startswith("reply_"))
 async def admin_reply_start(call: CallbackQuery, state: FSMContext):
     _, order_id, user_id = call.data.split("_")
     await state.update_data(target_order_id=order_id, target_user_id=user_id)
@@ -531,7 +523,7 @@ async def admin_reply_start(call: CallbackQuery, state: FSMContext):
     await state.set_state(AdminForm.waiting_for_reply_file)
     await call.answer()
 
-@router.message(AdminForm.waiting_for_reply_file, F.photo | F.document)
+@dp.message(AdminForm.waiting_for_reply_file, F.photo | F.document)
 async def admin_send_file(message: Message, state: FSMContext):
     data = await state.get_data()
     target_user_id = int(data['target_user_id'])
