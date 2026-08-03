@@ -551,8 +551,23 @@ async def admin_send_file(message: Message, state: FSMContext):
     await message.answer(f"✅ #{target_order_id}-sonli ma'lumotnoma mijozga muvaffaqiyatli yuborildi va arxivga saqlandi!")
     await state.clear()
 
+from aiohttp import web
+
+async def handle(request):
+    return web.Response(text="Bot ishlayapti!")
+
 async def main():
-    await bot.delete_webhook(drop_pending_updates=True) 
+    # Render portni ko'rishi uchun soxta server
+    app = web.Application()
+    app.router.add_get("/", handle)
+    runner = web.AppRunner(app)
+    await runner.setup()
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+
+    # Botni ishga tushirish
+    await bot.delete_webhook(drop_pending_updates=True)
     await dp.start_polling(bot)
 
 if __name__ == '__main__':
